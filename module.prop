@@ -1,0 +1,6 @@
+id=hy_process_guardian
+name=进程守护
+version=v2.1
+versionCode=210
+author=haoyou781013
+description=白名单式进程保护。对指定应用钉死 oom_score_adj、解 cgroup 冻结、加 Doze 白名单与 appops 放行，抵御一加/ColorOS 的 freeze/suspend/kill 三层机制。带 WebUI，可直接从应用列表勾选。

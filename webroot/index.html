@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>进程守护</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+:root{
+  --bg:#0e1013; --card:#171a20; --card2:#1e222a; --fg:#e6e8ec; --dim:#8b919c;
+  --accent:#4d8dff; --ok:#2fbf7a; --warn:#e8a33d; --err:#e85c5c; --line:#262b34;
+  --r:16px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);
+  font:15px/1.65 -apple-system,"Noto Sans SC","HarmonyOS Sans","PingFang SC",system-ui,sans-serif;
+  padding:18px 16px calc(96px + env(safe-area-inset-bottom));}
+h1{font-size:20px;margin:0 0 2px;font-weight:700;letter-spacing:.2px}
+.sub{color:var(--dim);font-size:12.5px;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:14px}
+.card h2{font-size:13px;margin:0 0 12px;color:var(--accent);font-weight:600;letter-spacing:.4px}
+.search{width:100%;padding:11px 14px;border-radius:11px;border:1px solid var(--line);
+  background:var(--bg);color:var(--fg);font-size:14px;outline:none;font-family:inherit}
+.search::placeholder{color:#565d68}
+.search:focus{border-color:var(--accent)}
+.apps{max-height:44vh;overflow-y:auto;margin-top:12px;-webkit-overflow-scrolling:touch}
+.app{display:flex;align-items:center;gap:12px;padding:11px 10px;border-radius:11px;cursor:pointer;
+  transition:background .15s}
+.app:active{background:var(--card2)}
+.app.on{background:rgba(77,141,255,.11)}
+.app .cb{width:21px;height:21px;border-radius:6px;border:2px solid #3d4450;flex:0 0 auto;
+  display:flex;align-items:center;justify-content:center;transition:.15s}
+.app.on .cb{background:var(--accent);border-color:var(--accent)}
+.app .cb svg{opacity:0;transition:.15s}
+.app.on .cb svg{opacity:1}
+.app .txt{flex:1;min-width:0}
+.app .nm{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app .pk{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0}
+.row label{font-size:13.5px}
+.row .v{color:var(--accent);font-size:13px;font-variant-numeric:tabular-nums;font-weight:600}
+input[type=range]{width:100%;accent-color:var(--accent);margin:6px 0 2px;height:22px}
+.sw{position:relative;width:48px;height:27px;flex:0 0 auto}
+.sw input{opacity:0;width:0;height:0;position:absolute}
+.sw i{position:absolute;inset:0;background:#3a4049;border-radius:14px;transition:.2s;cursor:pointer}
+.sw i:before{content:"";position:absolute;width:21px;height:21px;left:3px;top:3px;
+  background:#fff;border-radius:50%;transition:.2s}
+.sw input:checked+i{background:var(--accent)}
+.sw input:checked+i:before{transform:translateX(21px)}
+.bar{position:fixed;left:0;right:0;bottom:0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));
+  background:linear-gradient(to top,var(--bg) 72%,transparent);display:flex;gap:11px;z-index:10}
+button{flex:1;padding:14px;border:none;border-radius:13px;font-size:15px;font-weight:600;
+  background:var(--accent);color:#fff;cursor:pointer;font-family:inherit}
+button:active{opacity:.82}
+button.ghost{background:var(--card2);color:var(--fg)}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:11px;padding:12px;
+  font:11.5px/1.6 ui-monospace,"SF Mono",Menlo,monospace;color:#a8b0bd;margin:0;
+  white-space:pre-wrap;word-break:break-all;max-height:36vh;overflow-y:auto}
+.hint{font-size:12px;color:var(--dim);margin-top:9px;line-height:1.6}
+.toast{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) scale(.9);
+  background:rgba(0,0,0,.9);color:#fff;padding:13px 22px;border-radius:13px;
+  font-size:14px;opacity:0;pointer-events:none;transition:.22s;z-index:99;max-width:80vw;text-align:center}
+.toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.empty{color:var(--dim);font-size:13px;padding:20px 10px;text-align:center}
+.badge{display:inline-block;padding:2px 8px;border-radius:7px;font-size:11px;
+  background:rgba(77,141,255,.14);color:var(--accent);margin-left:7px;vertical-align:middle}
+</style>
+</head>
+<body>
+
+<h1>进程守护 <span class="badge" id="ver">v2.1</span></h1>
+<div class="sub" id="bridgeState">正在检测 KernelSU…</div>
+
+<div class="card">
+  <h2>保护名单</h2>
+  <input class="search" id="q" placeholder="搜索应用名或包名">
+  <div class="apps" id="apps"><div class="empty">加载中…</div></div>
+  <div class="hint">已选 <b id="cnt">0</b> 个应用</div>
+</div>
+
+<div class="card">
+  <h2>保护强度</h2>
+  <div class="row"><label>oom_score_adj</label><span class="v" id="adjv">-1000</span></div>
+  <input type="range" id="adj" min="-1000" max="0" step="100" value="-1000">
+  <div class="hint">-1000 完全豁免（系统级）· -900 很高 · -800 高。越低越不容易被杀。</div>
+
+  <div class="row" style="margin-top:8px"><label>扫描间隔</label><span class="v" id="itvv">1 秒</span></div>
+  <input type="range" id="itv" min="1" max="30" step="1" value="1">
+  <div class="hint">游戏建议 1 秒，日常应用 10~15 秒。</div>
+
+  <div class="row"><label>解冻被冻结的进程</label>
+    <div class="sw"><input type="checkbox" id="fz" checked><i></i></div></div>
+  <div class="row"><label>Doze 白名单</label>
+    <div class="sw"><input type="checkbox" id="dz" checked><i></i></div></div>
+  <div class="row"><label>appops 后台放行</label>
+    <div class="sw"><input type="checkbox" id="ao" checked><i></i></div></div>
+</div>
+
+<div class="card">
+  <h2>运行状态</h2>
+  <pre id="st">读取中…</pre>
+</div>
+
+<div class="card">
+  <h2>说明</h2>
+  <div class="hint">
+    一加 / ColorOS 四层杀后台：<br>
+    ① freeze（cgroup 冻结）→ 本模块解冻<br>
+    ② suspend（线程挂起）→ appops 降低触发<br>
+    ③ kill（lmkd / athena）→ oom_score_adj 劝退<br>
+    ④ force-stop（手动/一键清理）→ <span style="color:var(--err)">无法拦截</span>
+  </div>
+</div>
+
+<div class="bar">
+  <button class="ghost" onclick="reload()">刷新</button>
+  <button onclick="save()">保存并应用</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="ksu-bridge.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const DIR = '/data/adb/hy_guardian';
+const LIST = DIR + '/list.conf';
+const CONF = DIR + '/guard.conf';
+
+let allApps = [];
+let picked = new Set();
+let hintMap = {};
+
+function toast(msg, ms=1600){
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._tid);
+  t._tid = setTimeout(()=>t.classList.remove('show'), ms);
+}
+
+const sq = v => "'" + String(v).replace(/'/g, "'\\''") + "'";
+
+async function sh(cmd){
+  const r = await KSU.exec(cmd);
+  if (r.errno !== 0 && r.stderr) throw new Error(r.stderr.trim());
+  return r.stdout;
+}
+
+// ── 读名单 ──
+async function readList(){
+  try{
+    const out = await sh(`[ -f ${sq(LIST)} ] && cat ${sq(LIST)} || echo ''`);
+    return out.split('\n').map(s=>s.trim()).filter(s=>s && !s.startsWith('#'));
+  }catch(e){ return []; }
+}
+
+// ── 读配置 ──
+async function readConf(){
+  const c = { OOM_ADJ:'-1000', POLL_INTERVAL:'1', ENABLE_FREEZE_THAW:'1',
+              ENABLE_DOZE:'1', ENABLE_APPOPS:'1' };
+  try{
+    const out = await sh(`[ -f ${sq(CONF)} ] && cat ${sq(CONF)} || echo ''`);
+    out.split('\n').forEach(line=>{
+      const m = line.match(/^\s*(\w+)\s*=\s*"?([^"\n]*)"?\s*$/);
+      if(m) c[m[1]] = m[2];
+    });
+  }catch(e){}
+  return c;
+}
+
+// ── 应用列表 ──
+async function loadApps(){
+  let pkgs = [];
+  try{
+    if(typeof ksu !== 'undefined' && typeof ksu.listPackages === 'function'){
+      pkgs = JSON.parse(ksu.listPackages('user'));
+    }else{
+      const out = await sh('pm list packages -3 | sed "s/^package://"');
+      pkgs = out.split('\n').map(s=>s.trim()).filter(Boolean);
+    }
+  }catch(e){
+    const out = await sh('pm list packages -3 | sed "s/^package://"');
+    pkgs = out.split('\n').map(s=>s.trim()).filter(Boolean);
+  }
+  // 取显示名
+  let infos = [];
+  try{
+    if(typeof ksu !== 'undefined' && typeof ksu.getPackagesInfo === 'function'){
+      infos = await KSU.getPackagesInfo(pkgs);
+      if(!Array.isArray(infos)) infos = [infos];
+    }
+  }catch(e){ infos = []; }
+  const nameMap = {};
+  infos.forEach(it=>{
+    if(it && it.packageName) nameMap[it.packageName] = it.label || it.appLabel || '';
+  });
+  return pkgs.map(p=>({ pkg:p, label: nameMap[p] || p.split('.').pop() }));
+}
+
+function renderApps(){
+  const q = $('#q').value.trim().toLowerCase();
+  const box = $('#apps');
+  let list = allApps;
+  if(q) list = list.filter(a =>
+    a.pkg.toLowerCase().includes(q) || (a.label||'').toLowerCase().includes(q));
+  // 已选排前
+  list = [...list].sort((a,b)=>{
+    const ai = picked.has(a.pkg)?0:1, bi = picked.has(b.pkg)?0:1;
+    return ai - bi || a.pkg.localeCompare(b.pkg);
+  });
+  if(!list.length){
+    box.innerHTML = '<div class="empty">没有匹配的应用</div>';
+    return;
+  }
+  box.innerHTML = list.map(a=>`
+    <div class="app ${picked.has(a.pkg)?'on':''}" data-pkg="${a.pkg}">
+      <div class="cb"><svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+        stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"/></svg></div>
+      <div class="txt"><div class="nm">${esc(a.label)}</div><div class="pk">${esc(a.pkg)}</div></div>
+    </div>`).join('');
+  box.querySelectorAll('.app').forEach(el=>{
+    el.onclick = ()=>{
+      const p = el.dataset.pkg;
+      if(picked.has(p)) picked.delete(p); else picked.add(p);
+      el.classList.toggle('on', picked.has(p));
+      $('#cnt').textContent = picked.size;
+    };
+  });
+}
+
+function esc(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c=>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+$('#q').addEventListener('input', renderApps);
+$('#adj').addEventListener('input', e=>{ $('#adjv').textContent = e.target.value; });
+$('#itv').addEventListener('input', e=>{ $('#itvv').textContent = e.target.value + ' 秒'; });
+
+// ── 保存 ──
+async function save(){
+  try{
+    const listTxt = [...picked].join('\n');
+    const confTxt = [
+      `OOM_ADJ="${$('#adj').value}"`,
+      `POLL_INTERVAL="${$('#itv').value}"`,
+      `ENABLE_FREEZE_THAW="${$('#fz').checked?1:0}"`,
+      `ENABLE_CGROUP_MOVE="1"`,
+      `ENABLE_DOZE="${$('#dz').checked?1:0}"`,
+      `ENABLE_APPOPS="${$('#ao').checked?1:0}"`,
+    ].join('\n') + '\n';
+
+    await sh(`mkdir -p ${DIR}; printf '%s\\n' ${sq(listTxt)} > ${sq(LIST)}`);
+    await sh(`printf '%s\\n' ${sq(confTxt)} > ${sq(CONF)}`);
+    toast('已保存，守护进程会自动重载');
+    setTimeout(refreshStatus, 1500);
+  }catch(e){
+    toast('保存失败：' + e.message, 3000);
+  }
+}
+
+// ── 状态 ──
+async function refreshStatus(){
+  try{
+    const pid = (await sh(`cat /data/local/tmp/hy_guardian.pid 2>/dev/null || echo ''`)).trim();
+    let alive = 'STOPPED';
+    if(pid) alive = (await sh(`[ -d /proc/${pid} ] && echo RUN || echo STOP`)).trim();
+
+    let txt = '=== 守护进程 ===\n';
+    txt += (alive === 'RUN' ? `RUNNING  pid=${pid}` : 'STOPPED（重启后由 service.sh 拉起）') + '\n';
+
+    txt += '\n=== 保护对象 ===\n';
+    if(!picked.size){
+      txt += '（白名单为空，请勾选应用）\n';
+    }else{
+      const script = [...picked].map(pkg=>`
+        hit=""
+        for d in /proc/[0-9]*; do
+          c=$(tr '\\0' '\\n' < "$d/cmdline" 2>/dev/null | head -n1)
+          case "$c" in
+            "${pkg}"|"${pkg}":*)
+              p="\${d#/proc/}"
+              a=$(cat "$d/oom_score_adj" 2>/dev/null)
+              f=$(awk -F: '$2=="freezer"{print $3}' "$d/cgroup" 2>/dev/null)
+              fs="-"; [ -n "$f" ] && [ -f "/sys/fs/cgroup\${f}/cgroup.freeze" ] && fs=$(cat "/sys/fs/cgroup\${f}/cgroup.freeze" 2>/dev/null)
+              echo "  ✓ $c  pid=$p  adj=$a  frozen=$fs"
+              hit=1 ;;
+          esac
+        done 2>/dev/null
+        [ -z "$hit" ] && echo "  · ${pkg}（未运行）"
+      `).join('\n');
+      txt += await sh(script);
+    }
+    txt += '\n=== 最近日志 ===\n';
+    txt += await sh('tail -n 10 /data/local/tmp/hy_guardian.log 2>/dev/null || echo "（无日志）"');
+    $('#st').textContent = txt;
+  }catch(e){
+    $('#st').textContent = '读取失败：' + e.message;
+  }
+}
+
+async function reload(){
+  toast('刷新中…', 700);
+  const [list, conf] = await Promise.all([readList(), readConf()]);
+  picked = new Set(list);
+  $('#adj').value = conf.OOM_ADJ;
+  $('#adjv').textContent = conf.OOM_ADJ;
+  $('#itv').value = conf.POLL_INTERVAL;
+  $('#itvv').textContent = conf.POLL_INTERVAL + ' 秒';
+  $('#fz').checked = conf.ENABLE_FREEZE_THAW === '1';
+  $('#dz').checked = conf.ENABLE_DOZE === '1';
+  $('#ao').checked = conf.ENABLE_APPOPS === '1';
+  $('#cnt').textContent = picked.size;
+  allApps = await loadApps();
+  renderApps();
+  refreshStatus();
+}
+
+// ── 启动 ──
+(async ()=>{
+  if(typeof ksu === 'undefined'){
+    $('#bridgeState').textContent = '⚠ 未检测到 KernelSU 桥接，请从 KernelSU 管理器中打开此页面';
+    $('#bridgeState').style.color = 'var(--err)';
+    $('#apps').innerHTML = '<div class="empty">需要 KernelSU 环境</div>';
+    return;
+  }
+  $('#bridgeState').textContent = 'KernelSU 已连接';
+  $('#bridgeState').style.color = 'var(--ok)';
+  await reload();
+  setInterval(refreshStatus, 4000);
+})();
+</script>
+</body>
+</html>
