@@ -1,6 +1,6 @@
-# 进程守护 Process Guardian v2.0
+# 进程守护 Process Guardian v2.2
 
-**白名单式进程保护**，抵御一加 / ColorOS 的后台杀进程。带 WebUI，可直接从应用列表勾选。
+**白名单式进程保护 + 内存清理**，抵御一加 / ColorOS 的后台杀进程。带 WebUI，可直接从应用列表勾选。
 
 ---
 
@@ -67,6 +67,52 @@ KernelSU 管理器 → 模块 → 进程守护 → **打开**。
 - **解冻 / Doze / appops 开关**
 - **实时状态**（每个目标的 pid、当前 adj、冻结状态）
 
+## 内存清理
+
+WebUI 顶部有内存面板（可用 / 已用 / 页缓存 / Swap / 进程数），
+下面是三级清理：
+
+| 级别 | 做什么 | 实测效果（10.9 GB 机型） |
+|---|---|---|
+| **轻度** | `sync` + `drop_caches` 清页缓存 | 缓存 2.23 → 1.24 GB |
+| **标准** | 轻度 + `am kill-all` 回收后台 | 可用 3.79 → 4.07 GB，后台进程 54 → 0 |
+| **深度** | 标准 + 三轮 `drop_caches` 叠加 | 再 +164 MB |
+
+**清理不会杀掉白名单里的应用。** 白名单进程因为 `oom_score_adj=-1000`
+本身就是系统最后才会动的对象，`am kill-all` 也不会碰它们。
+
+### 为什么"深度"不杀进程
+
+早期版本试过用 `kill -9` 终止第三方后台进程，**实测证伪**：
+
+```
+杀 5 个进程后：l3_freed_mb=-12     ← 可用内存反而降了
+杀 12 个进程后：freed_mb=-228       ← 降得更多
+```
+
+原因：进程被杀后其物理页立刻被系统复用（缓存、页表重建、进程重启），
+`MemAvailable` 几乎不会增加，还带来误杀风险。
+
+真正有效的只有 `drop_caches`（释放页缓存）和 `am kill-all`（回收 cached 空进程）。
+
+### 自动清理
+
+WebUI 里打开「可用低于阈值时自动清理」，设定阈值（500~4000 MB）与级别，
+守护进程每 60 秒检查一次。日志在 `/data/local/tmp/hy_guardian.log`。
+
+实测：阈值 6000 MB、可用 3991 MB 时触发标准清理，释放 340 MB。
+
+### 命令行
+
+```bash
+M=/data/adb/modules/hy_process_guardian/system/bin/hy_guardian.sh
+
+sh $M mem_stat          # 内存状态（键值行，供 WebUI 解析）
+sh $M mem_clean 1       # 轻度
+sh $M mem_clean 2       # 标准
+sh $M mem_clean 3       # 深度
+```
+
 ## 手工配置
 
 ```bash
@@ -81,6 +127,11 @@ ENABLE_FREEZE_THAW="1"
 ENABLE_CGROUP_MOVE="1"
 ENABLE_DOZE="1"
 ENABLE_APPOPS="1"
+
+# 内存清理
+MEM_AUTO_CLEAN="0"        # 1=开启自动清理
+MEM_MIN_AVAIL_MB="1500"   # 低于此值触发
+MEM_CLEAN_LEVEL="2"       # 1=轻度 2=标准 3=深度
 ```
 
 改完等 1 秒自动生效（守护进程每秒重读名单）。
@@ -113,8 +164,10 @@ cat /proc/$pid/cgroup | grep freezer  # 看 freezer 路径
    `oplus_suspend_resume_monitors` 是独立机制，`cgroup.freeze` 拦不住它。
    appops 放行能减少触发，但不是根治。
 
-4. **每 1 秒扫 /proc 有开销**
-   进程多（>800）时可见。日常应用可以调到 10~15 秒。
+4. **扫描开销**
+   已优化到单轮约 60 ms（941 进程）。原实现逐个 fork 子进程需 1159 ms，
+   会让 1 秒轮询实际变成 15 秒一轮 —— v2.2 已修复。
+   进程数特别多、或设备较弱时，可把扫描间隔调到 5~10 秒。
 
 ## 卸载
 
